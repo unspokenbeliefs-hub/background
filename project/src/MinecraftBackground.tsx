@@ -1,15 +1,5 @@
 import { useEffect, useRef } from 'react';
 
-interface Leaf {
-  x: number; y: number;
-  vx: number; vy: number;
-  size: number;
-  rotation: number; rotSpeed: number;
-  opacity: number;
-  color: string;
-  life: number; maxLife: number;
-}
-
 interface Firefly {
   x: number; y: number;
   vx: number; vy: number;
@@ -44,23 +34,6 @@ const TREES: TreeDef[] = [
   { xf: 0.96,  type: 'birch',   trunkH: 8,  canopyR: 2, bp: 13, swayAmp: 2.3, swayPhase: 3.0 },
 ];
 
-// Leaf colors per tree type
-const LEAF_COLORS: Record<TreeType, string[]> = {
-  oak:     ['#2e7d32', '#388e3c', '#1b5e20', '#43a047'],
-  birch:   ['#558b2f', '#689f38', '#7cb342', '#33691e'],
-  spruce:  ['#1b5e20', '#145214', '#1e6b22', '#0d3010'],
-  darkoak: ['#1a3d1a', '#1e4a1e', '#153015', '#2d5a2d'],
-};
-
-// Returns the Y of the canopy top for leaf spawning
-function getCanopyTopY(def: TreeDef, groundY: number): number {
-  const topY = groundY - def.trunkH * def.bp;
-  if (def.type === 'spruce') {
-    return topY - def.trunkH * 0.55 * def.bp * 1.5;
-  }
-  return topY - (def.canopyR + 1) * def.bp;
-}
-
 // ── Draw helpers ─────────────────────────────────────────────────────────────
 
 function block(
@@ -79,6 +52,92 @@ function block(
   ctx.fillRect(x, y, Math.max(2, w * 0.12), h);
 }
 
+function drawBarkTexture(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  baseColor: string, darkColor: string
+) {
+  ctx.fillStyle = baseColor;
+  ctx.fillRect(x, y, w, h);
+
+  // Add subtle bark grooves
+  ctx.fillStyle = darkColor;
+  const grooveCount = Math.max(2, Math.floor(w / 4));
+  for (let i = 0; i < grooveCount; i++) {
+    const gx = x + Math.random() * w;
+    const gw = Math.random() * 2 + 1;
+    const gh = Math.random() * h * 0.6 + h * 0.2;
+    const gy = y + Math.random() * (h - gh);
+    ctx.fillRect(gx, gy, gw, gh);
+  }
+
+  // Top highlight
+  ctx.fillStyle = 'rgba(255,255,255,0.12)';
+  ctx.fillRect(x, y, w, Math.max(2, h * 0.12));
+  // Bottom shadow
+  ctx.fillStyle = 'rgba(0,0,0,0.25)';
+  ctx.fillRect(x, y + h - Math.max(2, h * 0.15), w, Math.max(2, h * 0.15));
+  ctx.fillRect(x, y, Math.max(2, w * 0.10), h);
+}
+
+function drawBirchTexture(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, w: number, h: number,
+  isDark: boolean
+) {
+  const base = isDark ? '#b0b0a0' : '#e8e4d8';
+  const shadow = isDark ? '#6e6e60' : '#a8a498';
+  ctx.fillStyle = base;
+  ctx.fillRect(x, y, w, h);
+
+  // Birch horizontal bark rings
+  ctx.fillStyle = shadow;
+  const ringY = y + Math.random() * h * 0.7;
+  ctx.fillRect(x, ringY, w, Math.max(1, h * 0.08));
+  ctx.fillRect(x + w * 0.1, ringY + Math.random() * 6, w * 0.3, Math.max(1, h * 0.05));
+
+  // Small dark knots
+  ctx.fillStyle = '#5a5548';
+  const knotSize = Math.random() * 2 + 1;
+  ctx.fillRect(x + Math.random() * w * 0.8, y + Math.random() * h * 0.8, knotSize, knotSize);
+
+  ctx.fillStyle = 'rgba(255,255,255,0.15)';
+  ctx.fillRect(x, y, w, Math.max(1, h * 0.08));
+  ctx.fillStyle = 'rgba(0,0,0,0.18)';
+  ctx.fillRect(x, y + h - Math.max(1, h * 0.12), w, Math.max(1, h * 0.12));
+  ctx.fillRect(x, y, Math.max(1, w * 0.08), h);
+}
+
+function drawLeafBlock(
+  ctx: CanvasRenderingContext2D,
+  x: number, y: number, size: number,
+  base: string, hi: string, lo: string,
+  sway: number, depth: number
+) {
+  const sx = Math.round(x + sway * depth);
+  const sy = Math.round(y);
+  const s = Math.round(size);
+
+  ctx.fillStyle = base;
+  ctx.fillRect(sx, sy, s, s);
+
+  // Inner depth shading
+  ctx.fillStyle = hi;
+  ctx.fillRect(sx, sy, s, Math.max(2, s * 0.18));
+  ctx.fillStyle = lo;
+  ctx.fillRect(sx, sy + s - Math.max(2, s * 0.22), s, Math.max(2, s * 0.22));
+  ctx.fillRect(sx, sy, Math.max(2, s * 0.14), s);
+
+  // Tiny leaf texture dots
+  ctx.fillStyle = 'rgba(0,0,0,0.15)';
+  ctx.fillRect(sx + s * 0.3, sy + s * 0.3, Math.max(1, s * 0.12), Math.max(1, s * 0.12));
+  ctx.fillRect(sx + s * 0.6, sy + s * 0.5, Math.max(1, s * 0.08), Math.max(1, s * 0.08));
+
+  // Subtle highlight edge
+  ctx.fillStyle = 'rgba(255,255,255,0.08)';
+  ctx.fillRect(sx + s * 0.2, sy + s * 0.2, s * 0.6, 1);
+}
+
 // ── Tree draw functions ───────────────────────────────────────────────────────
 
 function drawOak(
@@ -86,31 +145,44 @@ function drawOak(
   cx: number, groundY: number, trunkH: number, canopyR: number, bp: number, sway: number
 ) {
   const tx = Math.round(cx - bp / 2);
+
+  // Trunk with bark texture
   for (let i = 0; i < trunkH; i++) {
-    block(ctx, tx, groundY - (i + 1) * bp, bp, bp, '#6b3d11', '#8b5a2b', '#3d2008');
+    drawBarkTexture(ctx, tx, groundY - (i + 1) * bp, bp, bp,
+      '#6b3d11', '#3d2008');
   }
+
+  // Small branches on the trunk
+  if (trunkH > 5) {
+    const branchY = groundY - (trunkH - 1) * bp;
+    const dir = cx > window.innerWidth * 0.5 ? -1 : 1;
+    ctx.fillStyle = '#5a3310';
+    ctx.fillRect(cx + dir * bp * 0.3, branchY, dir * bp * 0.8, bp * 0.3);
+    ctx.fillStyle = '#4a2a0a';
+    ctx.fillRect(cx + dir * bp * 0.5, branchY - bp * 0.3, dir * bp * 0.5, bp * 0.3);
+  }
+
   const topY = groundY - trunkH * bp;
-  // 4 layers – bottom widest, progressively narrower
   const layerDefs = [
     { dy: 0,       r: canopyR },
     { dy: -bp,     r: canopyR },
     { dy: -bp * 2, r: canopyR - 1 },
     { dy: -bp * 3, r: Math.max(0, canopyR - 2) },
   ];
+
   for (const { dy, r } of layerDefs) {
     if (r < 0) continue;
     for (let dx = -r; dx <= r; dx++) {
-      // Round the bottom corners only on wide layers
       if (r >= 3 && Math.abs(dx) === r && dy === 0) continue;
-      const leafSway = sway * (0.6 + Math.abs(dx) / r * 0.4);
+      const leafSway = sway * (0.6 + Math.abs(dx) / Math.max(1, r) * 0.4);
       const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
       const ly = topY + dy;
       const shade = (Math.abs(dx) + Math.abs(dy / bp)) % 2 === 0;
-      block(ctx, lx, ly - bp, bp, bp,
+      drawLeafBlock(ctx, lx, ly - bp, bp,
         shade ? '#2d7d32' : '#388e3c',
         shade ? '#43a047' : '#4caf50',
-        shade ? '#1b5e20' : '#2e7d32'
-      );
+        shade ? '#1b5e20' : '#2e7d32',
+        leafSway, 0.5);
     }
   }
 }
@@ -122,12 +194,9 @@ function drawBirch(
   const tx = Math.round(cx - bp / 2);
   for (let i = 0; i < trunkH; i++) {
     const ring = i % 3 === 1;
-    block(ctx, tx, groundY - (i + 1) * bp, bp, bp,
-      ring ? '#9e9e8e' : '#d4d0c4',
-      ring ? '#b0b0a0' : '#e8e4d8',
-      ring ? '#6e6e60' : '#a8a498'
-    );
+    drawBirchTexture(ctx, tx, groundY - (i + 1) * bp, bp, bp, ring);
   }
+
   const topY = groundY - trunkH * bp;
   const layerDefs = [
     { dy: 0,       r: canopyR },
@@ -136,6 +205,7 @@ function drawBirch(
     { dy: -bp * 3, r: canopyR - 1 },
     { dy: -bp * 4, r: Math.max(0, canopyR - 1) },
   ];
+
   for (const { dy, r } of layerDefs) {
     if (r < 0) continue;
     for (let dx = -r; dx <= r; dx++) {
@@ -144,11 +214,11 @@ function drawBirch(
       const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
       const ly = topY + dy;
       const shade = Math.abs(dx) % 2 === 0;
-      block(ctx, lx, ly - bp, bp, bp,
+      drawLeafBlock(ctx, lx, ly - bp, bp,
         shade ? '#558b2f' : '#689f38',
         shade ? '#7cb342' : '#8bc34a',
-        shade ? '#33691e' : '#3e7b1e'
-      );
+        shade ? '#33691e' : '#3e7b1e',
+        leafSway, 0.4);
     }
   }
 }
@@ -158,25 +228,42 @@ function drawSpruce(
   cx: number, groundY: number, trunkH: number, _r: number, bp: number, sway: number
 ) {
   const tx = Math.round(cx - bp / 2);
+
+  // Trunk with darker bark
   for (let i = 0; i < trunkH; i++) {
-    block(ctx, tx, groundY - (i + 1) * bp, bp, bp, '#4a2c0a', '#6b4015', '#2a1504');
+    drawBarkTexture(ctx, tx, groundY - (i + 1) * bp, bp, bp,
+      '#4a2c0a', '#2a1504');
   }
+
   const topY = groundY - trunkH * bp;
-  // Triangular tiers from top down
   const tiers = Math.round(trunkH * 0.65);
   const tierH = bp * 1.5;
+
   for (let tier = 0; tier < tiers; tier++) {
-    const r = tier; // each tier adds one block width
+    const r = tier;
     const ty = topY - (tiers - tier) * tierH;
     for (let dx = -r; dx <= r; dx++) {
       const leafSway = sway * (0.3 + Math.abs(dx) * 0.12) * (1 - tier / tiers);
       const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
       const shade = (tier + Math.abs(dx)) % 2 === 0;
-      block(ctx, lx, ty, bp, bp,
+      const depth = tier / tiers;
+      drawLeafBlock(ctx, lx, ty, bp,
         shade ? '#1b5e20' : '#145214',
         shade ? '#2e7d32' : '#1e6b22',
-        shade ? '#0d3010' : '#082008'
-      );
+        shade ? '#0d3010' : '#082008',
+        leafSway, depth);
+    }
+
+    // Add downward hanging branches for lower tiers
+    if (tier > 1 && tier < tiers - 2) {
+      const dir = tier % 2 === 0 ? 1 : -1;
+      const tierSway = sway * 0.3 * (1 - tier / tiers);
+      const bx = Math.round(cx + dir * r * bp + tierSway);
+      const by = ty + bp;
+      ctx.fillStyle = '#1b5e20';
+      ctx.fillRect(bx, by, bp * 0.4, bp * 1.2);
+      ctx.fillStyle = '#0d3010';
+      ctx.fillRect(bx, by + bp * 1.0, bp * 0.4, bp * 0.2);
     }
   }
 }
@@ -185,12 +272,35 @@ function drawDarkOak(
   ctx: CanvasRenderingContext2D,
   cx: number, groundY: number, trunkH: number, canopyR: number, bp: number, sway: number
 ) {
-  // Wide 2-block trunk
   const tw = bp * 2;
   const tx = Math.round(cx - tw / 2);
+
+  // Wide trunk with rough texture
   for (let i = 0; i < trunkH; i++) {
-    block(ctx, tx, groundY - (i + 1) * bp, tw, bp, '#2c1a08', '#4a2c10', '#160c04');
+    ctx.fillStyle = '#2c1a08';
+    ctx.fillRect(tx, groundY - (i + 1) * bp, tw, bp);
+
+    // Dark oak bark texture – irregular patches
+    ctx.fillStyle = '#1a0d04';
+    const patches = Math.floor(Math.random() * 3) + 1;
+    for (let p = 0; p < patches; p++) {
+      const px = tx + Math.random() * tw * 0.8;
+      const py = groundY - (i + 1) * bp + Math.random() * bp * 0.7;
+      ctx.fillRect(px, py, Math.random() * 4 + 2, Math.random() * 3 + 1);
+    }
+
+    ctx.fillStyle = 'rgba(255,255,255,0.08)';
+    ctx.fillRect(tx, groundY - (i + 1) * bp, tw, Math.max(2, bp * 0.1));
+    ctx.fillStyle = 'rgba(0,0,0,0.3)';
+    ctx.fillRect(tx, groundY - i * bp - Math.max(2, bp * 0.15), tw, Math.max(2, bp * 0.15));
+    ctx.fillRect(tx, groundY - (i + 1) * bp, Math.max(2, tw * 0.08), bp);
   }
+
+  // Roots at base
+  ctx.fillStyle = '#2c1a08';
+  ctx.fillRect(tx - bp * 0.4, groundY - bp * 0.3, bp * 0.5, bp * 0.3);
+  ctx.fillRect(tx + tw - bp * 0.1, groundY - bp * 0.25, bp * 0.5, bp * 0.25);
+
   const topY = groundY - trunkH * bp;
   const layerDefs = [
     { dy: 0,       r: canopyR },
@@ -198,6 +308,7 @@ function drawDarkOak(
     { dy: -bp * 2, r: canopyR - 1 },
     { dy: -bp * 3, r: Math.max(1, canopyR - 2) },
   ];
+
   for (const { dy, r } of layerDefs) {
     if (r < 0) continue;
     for (let dx = -r; dx <= r; dx++) {
@@ -208,7 +319,7 @@ function drawDarkOak(
       const bases = ['#1a3d1a', '#1e4a1e', '#153015'];
       const his   = ['#2d5a2d', '#336633', '#22481e'];
       const los   = ['#0d200d', '#0a1a0a', '#080f08'];
-      block(ctx, lx, ly - bp, bp, bp, bases[shade], his[shade], los[shade]);
+      drawLeafBlock(ctx, lx, ly - bp, bp, bases[shade], his[shade], los[shade], leafSway, 0.5);
     }
   }
 }
@@ -218,7 +329,6 @@ function drawDarkOak(
 export default function MinecraftBackground() {
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const animRef      = useRef<number>(0);
-  const leavesRef    = useRef<Leaf[]>([]);
   const firefliesRef = useRef<Firefly[]>([]);
   const timeRef      = useRef(0);
 
@@ -256,32 +366,11 @@ export default function MinecraftBackground() {
       bright: 0.45 + Math.random() * 0.55,
     }));
 
-    const spawnLeaf = (originX: number, originY: number, type: TreeType) => {
-      const palette = LEAF_COLORS[type];
-      const color   = palette[Math.floor(Math.random() * palette.length)];
-      leavesRef.current.push({
-        x: originX + (Math.random() - 0.5) * 40,
-        y: originY + Math.random() * 20,
-        vx: (Math.random() - 0.5) * 1.2,
-        vy: 0.35 + Math.random() * 0.65,
-        size: 6 + Math.random() * 7,
-        rotation: Math.random() * Math.PI * 2,
-        rotSpeed: (Math.random() - 0.5) * 0.07,
-        opacity: 0.75 + Math.random() * 0.25,
-        color,
-        life: 0,
-        maxLife: 300 + Math.random() * 250,
-      });
-    };
-
-    let frame = 0;
-
     const draw = () => {
       const W = canvas.width;
       const H = canvas.height;
       timeRef.current += 0.012;
       const t = timeRef.current;
-      frame++;
 
       const groundY = Math.floor(H * 0.80);
 
@@ -333,17 +422,59 @@ export default function MinecraftBackground() {
 
       // ── Ground ──────────────────────────────────────────────────────────
       const BP = 18; // ground block size
-      // Grass top row
+      // Grass top row with more detail
       for (let gx = 0; gx < W; gx += BP) {
         block(ctx, gx, groundY, BP, BP, '#2e7d32', '#43a047', '#1b5e20');
+        // Add grass blade tips
+        ctx.fillStyle = '#43a047';
+        const bladeCount = Math.floor(Math.random() * 3) + 1;
+        for (let b = 0; b < bladeCount; b++) {
+          const bx = gx + Math.random() * BP;
+          ctx.fillRect(bx, groundY - Math.random() * 4 - 1, Math.random() * 2 + 1, Math.random() * 3 + 2);
+        }
       }
-      // Dirt body
+
+      // Dirt body with more detail
       const dirtGrad = ctx.createLinearGradient(0, groundY + BP, 0, H);
       dirtGrad.addColorStop(0,   '#4e2c0e');
       dirtGrad.addColorStop(0.3, '#3a1f08');
       dirtGrad.addColorStop(1,   '#1a0d04');
       ctx.fillStyle = dirtGrad;
       ctx.fillRect(0, groundY + BP, W, H - groundY - BP);
+
+      // Dirt pebbles and stones
+      ctx.save();
+      ctx.globalAlpha = 0.5;
+      const pebbleCount = Math.floor(W / 40) + 5;
+      for (let i = 0; i < pebbleCount; i++) {
+        const px = Math.random() * W;
+        const py = groundY + BP + Math.random() * (H - groundY - BP);
+        const pSize = Math.random() * 4 + 2;
+        const shade = Math.random();
+        ctx.fillStyle = shade > 0.5 ? '#6b4428' : '#8b6344';
+        ctx.fillRect(px, py, pSize, pSize * 0.8);
+        // Pebble highlight
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(px, py, pSize, Math.max(1, pSize * 0.15));
+      }
+      ctx.restore();
+
+      // Dirt roots
+      ctx.save();
+      ctx.globalAlpha = 0.4;
+      ctx.strokeStyle = '#2e1a0a';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < Math.floor(W / 120) + 2; i++) {
+        const rx = Math.random() * W;
+        const ry = groundY + BP + Math.random() * (H - groundY - BP) * 0.4;
+        ctx.beginPath();
+        ctx.moveTo(rx, groundY + BP);
+        ctx.lineTo(rx + (Math.random() - 0.5) * 30, ry);
+        ctx.lineTo(rx + (Math.random() - 0.5) * 40, ry + Math.random() * 20);
+        ctx.stroke();
+      }
+      ctx.restore();
+
       // Dirt grid lines
       ctx.save();
       ctx.globalAlpha = 0.06;
@@ -367,57 +498,7 @@ export default function MinecraftBackground() {
           case 'spruce':  drawSpruce(ctx, cx, groundY, def.trunkH, def.canopyR, def.bp, sway);  break;
           case 'darkoak': drawDarkOak(ctx, cx, groundY, def.trunkH, def.canopyR, def.bp, sway); break;
         }
-
-        // Subtle canopy glow
-        const canopyY = getCanopyTopY(def, groundY) + def.canopyR * def.bp;
-        const glowR   = def.canopyR * def.bp * 2.2;
-        const cGlow   = ctx.createRadialGradient(cx, canopyY, 0, cx, canopyY, glowR);
-        cGlow.addColorStop(0, `rgba(30,120,30,0.07)`);
-        cGlow.addColorStop(1, 'rgba(0,0,0,0)');
-        ctx.fillStyle = cGlow;
-        ctx.beginPath();
-        ctx.arc(cx, canopyY, glowR, 0, Math.PI * 2);
-        ctx.fill();
       }
-
-      // ── Leaves – spawn from tree canopies ──────────────────────────────
-      if (frame % 7 === 0 && leavesRef.current.length < 75) {
-        const def  = TREES[Math.floor(Math.random() * TREES.length)];
-        const cx   = W * def.xf;
-        const topY = getCanopyTopY(def, groundY);
-        spawnLeaf(cx, topY, def.type);
-      }
-
-      leavesRef.current = leavesRef.current.filter((leaf) => {
-        leaf.life++;
-        if (leaf.life > leaf.maxLife || leaf.y > H + 20) return false;
-
-        // Wind drift
-        leaf.vx += Math.sin(t * 1.4 + leaf.y * 0.01) * 0.025;
-        leaf.x  += leaf.vx;
-        leaf.y  += leaf.vy;
-        leaf.rotation += leaf.rotSpeed;
-
-        const fade =
-          leaf.life < 20               ? leaf.life / 20 :
-          leaf.life > leaf.maxLife - 30 ? (leaf.maxLife - leaf.life) / 30 : 1;
-
-        ctx.save();
-        ctx.globalAlpha = leaf.opacity * fade;
-        ctx.translate(leaf.x, leaf.y);
-        ctx.rotate(leaf.rotation);
-        const s = leaf.size;
-        // Pixel leaf – single square with highlight + border
-        ctx.fillStyle = leaf.color;
-        ctx.fillRect(-s / 2, -s / 2, s, s);
-        ctx.fillStyle = 'rgba(120,220,120,0.45)';
-        ctx.fillRect(-s / 2, -s / 2, s, 2);
-        ctx.strokeStyle = 'rgba(0,30,0,0.4)';
-        ctx.lineWidth = 0.6;
-        ctx.strokeRect(-s / 2, -s / 2, s, s);
-        ctx.restore();
-        return true;
-      });
 
       // ── Fireflies – stay near treeline, not in sky ─────────────────────
       const treeBand = { top: groundY * 0.35, bot: groundY * 0.92 };
