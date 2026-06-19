@@ -5,6 +5,9 @@ interface Firefly {
   baseX: number; baseY: number;
   opacity: number; opDir: number;
   size: number; phase: number;
+  glowHue: number;
+  glowSat: number;
+  glowLit: number;
 }
 
 // All tree definitions – varied height, type, block size, position
@@ -41,6 +44,10 @@ function hash(n: number): number {
 }
 function hashRange(n: number, min: number, max: number): number {
   return min + hash(n) * (max - min);
+}
+
+function hsl(h: number, s: number, l: number): string {
+  return `hsl(${h}, ${s}%, ${l}%)`;
 }
 
 // ── Draw helpers ─────────────────────────────────────────────────────────────
@@ -143,6 +150,7 @@ function drawLeafBlock(
 
 // ── Tree draw functions ───────────────────────────────────────────────────────
 
+// Oak – wide, rounded, lush canopy. No pyramid, just a rounded blob.
 function drawOak(
   ctx: CanvasRenderingContext2D,
   cx: number, groundY: number, trunkH: number, canopyR: number, bp: number, sway: number,
@@ -150,35 +158,72 @@ function drawOak(
 ) {
   const tx = Math.round(cx - bp / 2);
 
+  // Thicker, textured trunk
   for (let i = 0; i < trunkH; i++) {
     drawBarkTexture(ctx, tx, groundY - (i + 1) * bp, bp, bp, '#6b3d11', '#3d2008', seed + i * 3.1);
   }
 
   const topY = groundY - trunkH * bp;
-  const layerDefs = [
-    { dy: 0,       r: canopyR },
-    { dy: -bp,     r: canopyR },
-    { dy: -bp * 2, r: canopyR - 1 },
-    { dy: -bp * 3, r: Math.max(0, canopyR - 2) },
+  const canopyWidth = canopyR * bp * 2 + bp;
+
+  // Build canopy as a blob of blocks with depth layers
+  const layers = [
+    { dy: -bp * 2.5, r: canopyR, back: true },
+    { dy: -bp * 2,   r: canopyR, back: false },
+    { dy: -bp,       r: canopyR + 1, back: false },
+    { dy: 0,          r: canopyR, back: false },
+    { dy: bp * 0.5,   r: canopyR - 1, back: false },
   ];
 
-  for (const { dy, r } of layerDefs) {
-    if (r < 0) continue;
-    for (let dx = -r; dx <= r; dx++) {
-      if (r >= 3 && Math.abs(dx) === r && dy === 0) continue;
-      const leafSway = sway * (0.6 + Math.abs(dx) / Math.max(1, r) * 0.4);
-      const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
-      const ly = topY + dy;
-      const shade = (Math.abs(dx) + Math.abs(dy / bp)) % 2 === 0;
+  for (const layer of layers) {
+    if (layer.r < 0) continue;
+    for (let dx = -layer.r; dx <= layer.r; dx++) {
+      const skip = hashRange(seed + layer.dy * 0.5 + dx * 7.3, 0, 1);
+      if (skip > 0.88) continue; // random gaps
+      if (layer.r >= 3 && Math.abs(dx) === layer.r && layer.dy === 0) continue;
+
+      const leafSway = sway * (0.6 + Math.abs(dx) / Math.max(1, layer.r) * 0.4);
+      // Back layer slightly offset for depth
+      const depthOffset = layer.back ? -bp * 0.3 : 0;
+      const lx = Math.round(cx + dx * bp - bp / 2 + leafSway + depthOffset);
+      const ly = topY + layer.dy;
+
+      // Vary shade by depth
+      const shade = layer.back
+        ? (Math.abs(dx) + Math.abs(dx)) % 2 === 0
+        : (Math.abs(dx) + Math.abs(layer.dy / bp)) % 2 === 0;
+
+      const baseColor = layer.back
+        ? (shade ? '#1a4a1a' : '#1b5e20')
+        : (shade ? '#2d7d32' : '#388e3c');
+      const hiColor = layer.back
+        ? (shade ? '#2e5a2e' : '#2e7d32')
+        : (shade ? '#43a047' : '#4caf50');
+      const loColor = layer.back
+        ? (shade ? '#0d200d' : '#0a1a0a')
+        : (shade ? '#1b5e20' : '#2e7d32');
+
       drawLeafBlock(ctx, lx, ly - bp, bp,
-        shade ? '#2d7d32' : '#388e3c',
-        shade ? '#43a047' : '#4caf50',
-        shade ? '#1b5e20' : '#2e7d32',
-        leafSway, 0.5, seed + dx * 7 + dy * 0.5);
+        baseColor, hiColor, loColor,
+        leafSway, layer.back ? 0.2 : 0.5, seed + dx * 7 + layer.dy * 0.5);
     }
+  }
+
+  // Dangling leaves below canopy
+  const dangles = Math.floor(hashRange(seed + 99, 1, 4));
+  for (let d = 0; d < dangles; d++) {
+    const ds = seed + d * 13.7;
+    const dx = hashRange(ds, -canopyR + 0.5, canopyR - 0.5);
+    const dy = hashRange(ds + 1, 0, bp * 2);
+    const sway = Math.sin(ds * 0.1) * sway * 0.5;
+    const lx = Math.round(cx + dx * bp + sway);
+    const ly = topY + dy;
+    drawLeafBlock(ctx, lx, ly, bp,
+      '#2d7d32', '#43a047', '#1b5e20', sway, 0.3, ds);
   }
 }
 
+// Birch – tall, thin trunk, sparse round canopy with drooping edges
 function drawBirch(
   ctx: CanvasRenderingContext2D,
   cx: number, groundY: number, trunkH: number, canopyR: number, bp: number, sway: number,
@@ -191,31 +236,49 @@ function drawBirch(
   }
 
   const topY = groundY - trunkH * bp;
-  const layerDefs = [
-    { dy: 0,       r: canopyR },
-    { dy: -bp,     r: canopyR },
-    { dy: -bp * 2, r: canopyR },
-    { dy: -bp * 3, r: canopyR - 1 },
-    { dy: -bp * 4, r: Math.max(0, canopyR - 1) },
+  const layers = [
+    { dy: -bp * 3,   r: canopyR - 1 },
+    { dy: -bp * 2,   r: canopyR },
+    { dy: -bp,       r: canopyR + 1 },
+    { dy: 0,         r: canopyR },
+    { dy: bp * 0.5,  r: canopyR - 1 },
   ];
 
-  for (const { dy, r } of layerDefs) {
-    if (r < 0) continue;
-    for (let dx = -r; dx <= r; dx++) {
-      if (Math.abs(dx) === r && r > 1) continue;
+  for (const layer of layers) {
+    if (layer.r < 0) continue;
+    for (let dx = -layer.r; dx <= layer.r; dx++) {
+      const skip = hashRange(seed + layer.dy * 0.3 + dx * 5.1, 0, 1);
+      if (skip > 0.82) continue;
+      if (Math.abs(dx) === layer.r && layer.r > 1 && skip > 0.5) continue;
       const leafSway = sway * (0.5 + Math.abs(dx) * 0.15);
       const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
-      const ly = topY + dy;
+      const ly = topY + layer.dy;
       const shade = Math.abs(dx) % 2 === 0;
       drawLeafBlock(ctx, lx, ly - bp, bp,
         shade ? '#558b2f' : '#689f38',
         shade ? '#7cb342' : '#8bc34a',
         shade ? '#33691e' : '#3e7b1e',
-        leafSway, 0.4, seed + dx * 5 + dy * 0.3);
+        leafSway, 0.4, seed + dx * 5 + layer.dy * 0.3);
+    }
+  }
+
+  // Drooping edges
+  const droopCount = Math.floor(hashRange(seed + 88, 1, 3));
+  for (let d = 0; d < droopCount; d++) {
+    const ds = seed + d * 19.3;
+    const dir = hashRange(ds, 0, 1) > 0.5 ? 1 : -1;
+    const dist = hashRange(ds + 1, canopyR * 0.8, canopyR + 0.5);
+    const len = Math.floor(hashRange(ds + 2, 1, 3));
+    const lx = Math.round(cx + dir * dist * bp + sway * 0.3);
+    const ly = topY + bp * 0.5;
+    for (let i = 0; i < len; i++) {
+      drawLeafBlock(ctx, lx, ly + i * bp, bp,
+        '#689f38', '#8bc34a', '#3e7b1e', sway * 0.2, 0.3, ds + i * 3);
     }
   }
 }
 
+// Spruce – tall conical but with organic irregular edges, ragged bottom, tapered top
 function drawSpruce(
   ctx: CanvasRenderingContext2D,
   cx: number, groundY: number, trunkH: number, _r: number, bp: number, sway: number,
@@ -223,6 +286,7 @@ function drawSpruce(
 ) {
   const tx = Math.round(cx - bp / 2);
 
+  // Thicker, textured trunk
   for (let i = 0; i < trunkH; i++) {
     drawBarkTexture(ctx, tx, groundY - (i + 1) * bp, bp, bp, '#4a2c0a', '#2a1504', seed + i * 4.2);
   }
@@ -231,11 +295,12 @@ function drawSpruce(
   const tiers = Math.round(trunkH * 0.65);
   const tierH = bp * 1.5;
 
-  // Organic tier widths: not perfectly symmetrical, some gaps
+  // Organic tier widths with noise
   const tierWidths: number[] = [];
   for (let tier = 0; tier < tiers; tier++) {
+    const t = tier / tiers;
     const ideal = tier;
-    const noise = hashRange(seed + tier * 7.3, -0.5, 0.5);
+    const noise = hashRange(seed + tier * 7.3, -0.8, 0.8);
     const actual = Math.max(1, Math.round(ideal + noise));
     tierWidths.push(actual);
   }
@@ -244,24 +309,45 @@ function drawSpruce(
     const r = tierWidths[tier];
     const ty = topY - (tiers - tier) * tierH;
     for (let dx = -r; dx <= r; dx++) {
-      // Skip some edge blocks for irregularity
-      const skipChance = hashRange(seed + tier * 3.1 + dx * 5.7, 0, 1);
-      if (Math.abs(dx) === r && skipChance > 0.7) continue;
-      if (Math.abs(dx) === r - 1 && tier > 1 && skipChance > 0.9) continue;
+      const skip = hashRange(seed + tier * 3.1 + dx * 5.7, 0, 1);
+      if (Math.abs(dx) === r && skip > 0.7) continue;
+      if (Math.abs(dx) === r - 1 && tier > 1 && skip > 0.9) continue;
 
       const leafSway = sway * (0.3 + Math.abs(dx) * 0.12) * (1 - tier / tiers);
       const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
       const shade = (tier + Math.abs(dx)) % 2 === 0;
       const depth = tier / tiers;
+
+      // Lighter on top, darker on bottom
+      const bases = tier < 2 ? ['#2d5a2d', '#336633', '#22481e'] : ['#1b5e20', '#145214', '#0d3010'];
+      const his   = tier < 2 ? ['#43a047', '#4caf50', '#388e3c'] : ['#2e7d32', '#1e6b22', '#1b4a1e'];
+      const los   = tier < 2 ? ['#1b5e20', '#2e7d32', '#0a1a0a'] : ['#0d3010', '#082008', '#051005'];
+      const idx = Math.abs(dx) % 3;
       drawLeafBlock(ctx, lx, ty, bp,
-        shade ? '#1b5e20' : '#145214',
-        shade ? '#2e7d32' : '#1e6b22',
-        shade ? '#0d3010' : '#082008',
-        leafSway, depth, seed + tier * 11 + dx * 3);
+        bases[idx], his[idx], los[idx], leafSway, depth, seed + tier * 11 + dx * 3);
+    }
+
+    // Downward branches for lower tiers
+    if (tier > 1 && tier < tiers - 2) {
+      const dir = tier % 2 === 0 ? 1 : -1;
+      const tierSway = sway * 0.3 * (1 - tier / tiers);
+      const bx = Math.round(cx + dir * r * bp + tierSway);
+      const by = ty + bp;
+      const branchLen = hashRange(seed + tier * 5.1, 1, 3);
+      for (let i = 0; i < branchLen; i++) {
+        ctx.fillStyle = i === branchLen - 1 ? '#0d3010' : '#1b5e20';
+        ctx.fillRect(bx, by + i * bp * 0.5, bp * 0.4, bp * 0.5);
+      }
     }
   }
+
+  // Top point
+  const topLeafSway = sway * 0.2;
+  drawLeafBlock(ctx, Math.round(cx - bp / 2 + topLeafSway), topY - bp * 0.5, bp,
+    '#1b5e20', '#2e7d32', '#0d3010', topLeafSway, 0.1, seed + 999);
 }
 
+// Dark Oak – very wide, dense, multi-layered canopy. Darker.
 function drawDarkOak(
   ctx: CanvasRenderingContext2D,
   cx: number, groundY: number, trunkH: number, canopyR: number, bp: number, sway: number,
@@ -270,6 +356,7 @@ function drawDarkOak(
   const tw = bp * 2;
   const tx = Math.round(cx - tw / 2);
 
+  // Thick, rough trunk
   for (let i = 0; i < trunkH; i++) {
     ctx.fillStyle = '#2c1a08';
     ctx.fillRect(tx, groundY - (i + 1) * bp, tw, bp);
@@ -290,29 +377,43 @@ function drawDarkOak(
     ctx.fillRect(tx, groundY - (i + 1) * bp, Math.max(2, tw * 0.08), bp);
   }
 
+  // Roots at base
   ctx.fillStyle = '#2c1a08';
   ctx.fillRect(tx - bp * 0.4, groundY - bp * 0.3, bp * 0.5, bp * 0.3);
   ctx.fillRect(tx + tw - bp * 0.1, groundY - bp * 0.25, bp * 0.5, bp * 0.25);
 
   const topY = groundY - trunkH * bp;
-  const layerDefs = [
-    { dy: 0,       r: canopyR },
-    { dy: -bp,     r: canopyR },
-    { dy: -bp * 2, r: canopyR - 1 },
-    { dy: -bp * 3, r: Math.max(1, canopyR - 2) },
+
+  // Dense multi-layer canopy
+  const layers = [
+    { dy: -bp * 2, r: canopyR, back: true },
+    { dy: -bp,    r: canopyR + 1, back: false },
+    { dy: 0,      r: canopyR, back: false },
+    { dy: bp * 0.5, r: canopyR - 1, back: false },
   ];
 
-  for (const { dy, r } of layerDefs) {
-    if (r < 0) continue;
-    for (let dx = -r; dx <= r; dx++) {
+  for (const layer of layers) {
+    if (layer.r < 0) continue;
+    for (let dx = -layer.r; dx <= layer.r; dx++) {
+      const skip = hashRange(seed + layer.dy + dx * 3.1, 0, 1);
+      if (skip > 0.85) continue;
+      if (layer.r >= 3 && Math.abs(dx) === layer.r && layer.dy === 0) continue;
+
       const leafSway = sway * (0.5 + Math.abs(dx) * 0.1);
-      const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
-      const ly = topY + dy;
-      const shade = (Math.abs(dx) + Math.abs(dy / bp)) % 3;
-      const bases = ['#1a3d1a', '#1e4a1e', '#153015'];
-      const his   = ['#2d5a2d', '#336633', '#22481e'];
-      const los   = ['#0d200d', '#0a1a0a', '#080f08'];
-      drawLeafBlock(ctx, lx, ly - bp, bp, bases[shade], his[shade], los[shade], leafSway, 0.5, seed + dx * 9 + dy * 0.7);
+      const depthOffset = layer.back ? -bp * 0.3 : 0;
+      const lx = Math.round(cx + dx * bp - bp / 2 + leafSway + depthOffset);
+      const ly = topY + layer.dy;
+      const shade = (Math.abs(dx) + Math.abs(layer.dy / bp)) % 3;
+      const bases = layer.back
+        ? ['#0f2a0f', '#0d1f0d', '#0a1a0a']
+        : ['#1a3d1a', '#1e4a1e', '#153015'];
+      const his = layer.back
+        ? ['#1a3a1a', '#1e4a1e', '#0d1f0d']
+        : ['#2d5a2d', '#336633', '#22481e'];
+      const los = layer.back
+        ? ['#0a0f0a', '#080d08', '#050505']
+        : ['#0d200d', '#0a1a0a', '#080f08'];
+      drawLeafBlock(ctx, lx, ly - bp, bp, bases[shade], his[shade], los[shade], leafSway, 0.5, seed + dx * 9 + layer.dy * 0.7);
     }
   }
 }
@@ -341,11 +442,26 @@ export default function MinecraftBackground() {
     const W = canvas.width;
     const H = canvas.height;
 
+    // Firefly color palettes (HSL green shades)
+    const fireflyColors = [
+      { h: 100, s: 85, l: 35 },  // dark green
+      { h: 110, s: 90, l: 45 },  // normal green
+      { h: 120, s: 85, l: 55 },  // light green
+      { h: 95,  s: 70, l: 25 },  // very dark green
+      { h: 125, s: 80, l: 65 },  // lime-green
+      { h: 105, s: 75, l: 40 },  // forest green
+      { h: 115, s: 65, l: 50 },  // muted green
+      { h: 130, s: 90, l: 55 },  // yellow-green
+      { h: 90,  s: 60, l: 30 },  // deep green
+      { h: 140, s: 70, l: 60 },  // pale green
+    ];
+
     // Fireflies – pre-positioned, gentle drift, no side wrapping
     const treeBand = { top: H * 0.35, bot: H * 0.92 };
     firefliesRef.current = Array.from({ length: 28 }, (_, i) => {
       const baseX = hashRange(i * 13.1 + 7, 0, W);
       const baseY = hashRange(i * 17.7 + 3, treeBand.top, treeBand.bot);
+      const color = fireflyColors[i % fireflyColors.length];
       return {
         x: baseX,
         y: baseY,
@@ -355,6 +471,9 @@ export default function MinecraftBackground() {
         opDir: hashRange(i * 47.1, 0, 1) > 0.5 ? 1 : -1,
         size: hashRange(i * 53.9, 1.2, 2.8),
         phase: hashRange(i * 61.2, 0, Math.PI * 2),
+        glowHue: color.h,
+        glowSat: color.s,
+        glowLit: color.l,
       };
     });
 
@@ -587,7 +706,7 @@ export default function MinecraftBackground() {
         }
       }
 
-      // ── Fireflies – gentle drift, stay in bounds, no side wrapping ─────
+      // ── Fireflies – varied green shades, gentle drift ─────────────────────
       const treeBandDyn = { top: groundY * 0.35, bot: groundY * 0.92 };
       for (let fi = 0; fi < firefliesRef.current.length; fi++) {
         const ff = firefliesRef.current[fi];
@@ -605,16 +724,23 @@ export default function MinecraftBackground() {
         const pulse  = (Math.sin(t * 1.2 + ff.phase) + 1) * 0.5;
         const radius = ff.size * 7 * (1 + pulse * 0.6);
 
+        // Each firefly has a unique green shade
+        const glowColor = hsl(ff.glowHue, ff.glowSat, ff.glowLit);
+        const glowColorMid = hsl(ff.glowHue, ff.glowSat - 10, ff.glowLit - 8);
+        const glowColorOuter = hsl(ff.glowHue, ff.glowSat - 25, ff.glowLit - 18);
+
         const glow = ctx.createRadialGradient(ff.x, ff.y, 0, ff.x, ff.y, radius);
-        glow.addColorStop(0,   `rgba(120,255,70,${ff.opacity * 0.9})`);
-        glow.addColorStop(0.3, `rgba(50,200,30,${ff.opacity * 0.4})`);
-        glow.addColorStop(1,   'rgba(20,100,10,0)');
+        glow.addColorStop(0,   glowColor.replace('hsl', 'hsla').replace(')', `,${ff.opacity * 0.9})`));
+        glow.addColorStop(0.3, glowColorMid.replace('hsl', 'hsla').replace(')', `,${ff.opacity * 0.4})`));
+        glow.addColorStop(1,   glowColorOuter.replace('hsl', 'hsla').replace(')', `,0)`));
         ctx.fillStyle = glow;
         ctx.beginPath();
         ctx.arc(ff.x, ff.y, radius, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillStyle = `rgba(200,255,160,${ff.opacity})`;
+        // Core dot – brighter
+        const coreLit = Math.min(95, ff.glowLit + 25);
+        ctx.fillStyle = hsl(ff.glowHue, ff.glowSat, coreLit).replace('hsl', 'hsla').replace(')', `,${ff.opacity})`);
         ctx.beginPath();
         ctx.arc(ff.x, ff.y, ff.size, 0, Math.PI * 2);
         ctx.fill();
