@@ -3,7 +3,6 @@ import { useEffect, useRef } from 'react';
 interface Firefly {
   x: number; y: number;
   baseX: number; baseY: number;
-  vx: number; vy: number;
   opacity: number; opDir: number;
   size: number; phase: number;
 }
@@ -40,14 +39,8 @@ function hash(n: number): number {
   let x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
   return x - Math.floor(x);
 }
-function hash2(n: number, m: number): number {
-  return hash(n * 73.3 + m * 29.7 + 5.1);
-}
 function hashRange(n: number, min: number, max: number): number {
   return min + hash(n) * (max - min);
-}
-function hashRange2(n: number, m: number, min: number, max: number): number {
-  return min + hash2(n, m) * (max - min);
 }
 
 // ── Draw helpers ─────────────────────────────────────────────────────────────
@@ -161,15 +154,6 @@ function drawOak(
     drawBarkTexture(ctx, tx, groundY - (i + 1) * bp, bp, bp, '#6b3d11', '#3d2008', seed + i * 3.1);
   }
 
-  if (trunkH > 5) {
-    const branchY = groundY - (trunkH - 1) * bp;
-    const dir = cx > window.innerWidth * 0.5 ? -1 : 1;
-    ctx.fillStyle = '#5a3310';
-    ctx.fillRect(cx + dir * bp * 0.3, branchY, dir * bp * 0.8, bp * 0.3);
-    ctx.fillStyle = '#4a2a0a';
-    ctx.fillRect(cx + dir * bp * 0.5, branchY - bp * 0.3, dir * bp * 0.5, bp * 0.3);
-  }
-
   const topY = groundY - trunkH * bp;
   const layerDefs = [
     { dy: 0,       r: canopyR },
@@ -247,10 +231,24 @@ function drawSpruce(
   const tiers = Math.round(trunkH * 0.65);
   const tierH = bp * 1.5;
 
+  // Organic tier widths: not perfectly symmetrical, some gaps
+  const tierWidths: number[] = [];
   for (let tier = 0; tier < tiers; tier++) {
-    const r = tier;
+    const ideal = tier;
+    const noise = hashRange(seed + tier * 7.3, -0.5, 0.5);
+    const actual = Math.max(1, Math.round(ideal + noise));
+    tierWidths.push(actual);
+  }
+
+  for (let tier = 0; tier < tiers; tier++) {
+    const r = tierWidths[tier];
     const ty = topY - (tiers - tier) * tierH;
     for (let dx = -r; dx <= r; dx++) {
+      // Skip some edge blocks for irregularity
+      const skipChance = hashRange(seed + tier * 3.1 + dx * 5.7, 0, 1);
+      if (Math.abs(dx) === r && skipChance > 0.7) continue;
+      if (Math.abs(dx) === r - 1 && tier > 1 && skipChance > 0.9) continue;
+
       const leafSway = sway * (0.3 + Math.abs(dx) * 0.12) * (1 - tier / tiers);
       const lx = Math.round(cx + dx * bp - bp / 2 + leafSway);
       const shade = (tier + Math.abs(dx)) % 2 === 0;
@@ -260,17 +258,6 @@ function drawSpruce(
         shade ? '#2e7d32' : '#1e6b22',
         shade ? '#0d3010' : '#082008',
         leafSway, depth, seed + tier * 11 + dx * 3);
-    }
-
-    if (tier > 1 && tier < tiers - 2) {
-      const dir = tier % 2 === 0 ? 1 : -1;
-      const tierSway = sway * 0.3 * (1 - tier / tiers);
-      const bx = Math.round(cx + dir * r * bp + tierSway);
-      const by = ty + bp;
-      ctx.fillStyle = '#1b5e20';
-      ctx.fillRect(bx, by, bp * 0.4, bp * 1.2);
-      ctx.fillStyle = '#0d3010';
-      ctx.fillRect(bx, by + bp * 1.0, bp * 0.4, bp * 0.2);
     }
   }
 }
@@ -364,8 +351,6 @@ export default function MinecraftBackground() {
         y: baseY,
         baseX,
         baseY,
-        vx: (hashRange(i * 23.3, 0.1, 0.3)) * (hashRange(i * 31.1, 0, 1) > 0.5 ? 1 : -1),
-        vy: (hashRange(i * 29.7, 0.05, 0.15)) * (hashRange(i * 37.5, 0, 1) > 0.5 ? 1 : -1),
         opacity: hashRange(i * 41.3, 0.15, 0.85),
         opDir: hashRange(i * 47.1, 0, 1) > 0.5 ? 1 : -1,
         size: hashRange(i * 53.9, 1.2, 2.8),
@@ -416,6 +401,23 @@ export default function MinecraftBackground() {
       });
     }
 
+    // Deterministic dirt cracks
+    const cracks: Array<{ x: number; y: number; w: number; h: number }> = [];
+    const crackCount = Math.floor(W / 80) + 8;
+    for (let i = 0; i < crackCount; i++) {
+      const s = i * 53.1 + 17;
+      const cx = hashRange(s, 0, W);
+      const cy = hashRange(s + 1, 0, H - H * 0.80 - BP);
+      const cw = hashRange(s + 2, 1, 4);
+      const ch = hashRange(s + 3, 8, 40);
+      cracks.push({
+        x: cx,
+        y: H * 0.80 + BP + cy,
+        w: cw,
+        h: ch,
+      });
+    }
+
     // Deterministic dirt roots
     const roots: Array<{ x: number; y1: number; y2: number; x2: number; x3: number }> = [];
     const rootCount = Math.floor(W / 120) + 2;
@@ -430,6 +432,23 @@ export default function MinecraftBackground() {
         x2: rx + (hashRange(s + 2, 0, 1) - 0.5) * 30,
         x3: rx + (hashRange(s + 3, 0, 1) - 0.5) * 40,
       });
+    }
+
+    // Deterministic grass block cracks
+    const grassCracks: Array<{ gx: number; cx: number; cy: number; cw: number; ch: number }> = [];
+    for (let gx = 0; gx < W; gx += BP) {
+      const s = gx * 0.07 + 2.5;
+      const crackCount = Math.floor(hashRange(s, 0, 3));
+      for (let c = 0; c < crackCount; c++) {
+        const cs = s + c * 11.3;
+        grassCracks.push({
+          gx,
+          cx: hashRange(cs, 0, BP),
+          cy: hashRange(cs + 1, 0, BP),
+          cw: hashRange(cs + 2, 1, 3),
+          ch: hashRange(cs + 3, 1, BP * 0.4),
+        });
+      }
     }
 
     const draw = () => {
@@ -483,10 +502,17 @@ export default function MinecraftBackground() {
       ctx.restore();
 
       // ── Ground ──────────────────────────────────────────────────────────
-      // Grass top row
+      // Grass top row with cracks
       for (let gx = 0; gx < W; gx += BP) {
         block(ctx, gx, groundY, BP, BP, '#2e7d32', '#43a047', '#1b5e20');
       }
+      // Grass cracks
+      ctx.fillStyle = '#1b5e20';
+      for (const c of grassCracks) {
+        ctx.globalAlpha = 0.35;
+        ctx.fillRect(c.gx + c.cx, groundY + c.cy, c.cw, c.ch);
+      }
+      ctx.globalAlpha = 1;
       // Deterministic grass blades
       for (const b of grassBlades) {
         ctx.fillStyle = '#43a047';
@@ -500,6 +526,14 @@ export default function MinecraftBackground() {
       dirtGrad.addColorStop(1,   '#1a0d04');
       ctx.fillStyle = dirtGrad;
       ctx.fillRect(0, groundY + BP, W, H - groundY - BP);
+
+      // Dirt cracks
+      ctx.fillStyle = '#1a0d04';
+      ctx.globalAlpha = 0.4;
+      for (const c of cracks) {
+        ctx.fillRect(c.x, c.y, c.w, c.h);
+      }
+      ctx.globalAlpha = 1;
 
       // Dirt pebbles
       ctx.save();
